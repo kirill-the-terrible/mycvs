@@ -27,10 +27,10 @@ def file_hash(path):
     return sha.hexdigest()
 
 
-def string_list_hash(array):
+def list_hash(array):
     sha = hashlib.sha1()
     for elem in array:
-        sha.update(elem.encode())
+        sha.update(bytearray(elem, encoding='utf-8') + b' ')
     return sha.hexdigest()
 
 
@@ -83,9 +83,12 @@ def commit():
     dirs = []
     hashes = []
     for root, dirnames, filenames in walk:
-        if '.mycvs' in root[:9]:  # ignore config folder
+        root = root[2:]
+        if '.mycvs' in root[:6]:  # ignore config folder
             continue
-        dirs.append(root)
+        if len(root):
+            dirs.append(root)
+
         for single_file in filenames:
             path = os.path.join(root, single_file)
             h = file_hash(path)
@@ -94,8 +97,8 @@ def commit():
                 compress_and_copy_file(path, '.mycvs/objects/' + h)
             files.append(path + '\t' + h)
 
-    out = '\n'.join(dirs) + '\n\n' + '\n'.join(files) + '\n'
-    checksum = string_list_hash(sorted(hashes))
+    out = '\n'.join(dirs) + '\n' + '\n'.join(files) + '\n'
+    checksum = list_hash(sorted(hashes))
     same_commit = commit_is_exist(checksum)
     if same_commit:
         print('Warning: This commit is the same with ' + same_commit)
@@ -145,14 +148,59 @@ def checkout(version):
         i = data.index('\n')
         dirs = data[:i]
         files = data[i + 1:]
-        for folder in dirs[1:]:
-            os.makedirs(folder.rstrip()[2:])
+        for folder in dirs:
+            os.makedirs(folder.rstrip())
         for i in range(len(files)):
             files[i] = files[i].rstrip().split('\t')
         for file, h in files:
             decompress_and_copy_file('.mycvs/objects/' + h, file)
     else:
         print('Error: No such version.')
+
+
+def diff(before, after):
+    import difflib
+    if os.path.isfile(".mycvs/commits/" + before):
+        f_in = open(".mycvs/commits/" + before)
+        data = f_in.readlines()
+        f_in.close()
+        i = data.index('\n')
+        before_files = {}
+        for elem in data[i+1:]:
+            name, obj = list(elem.rstrip().split('\t'))
+            before_files[name] = obj
+    else:
+        print("Error: There is no such version - " + before)
+        return
+
+    if os.path.isfile(".mycvs/commits/" + after):
+        f_in = open(".mycvs/commits/" + after)
+        data = f_in.readlines()
+        f_in.close()
+        i = data.index('\n')
+        after_files = {}
+        for elem in data[i+1:]:
+            name, obj = list(elem.rstrip().split('\t'))
+            after_files[name] = obj
+    else:
+        print("Error: There is no such version - " + after)
+        return
+
+    for elem in before_files:
+        if elem in after_files:
+            i = elem.rfind('\\')
+            filename = elem[i+1:].rstrip()
+            before_file = gzip.open(".mycvs/objects/" + before_files[elem])
+            after_file = gzip.open(".mycvs/objects/" + after_files.pop(elem))
+            for line in difflib.context_diff(before_file.readlines(), after_file.readlines(), fromfile=filename, tofile=filename):
+                sys.stdout.write(line)
+            sys.stdout.write('\n')
+            before_file.close()
+            after_file.close()
+        else:
+            sys.stdout.write("Deleted " + elem + '\n\n')
+    for elem in after_files:
+        sys.stdout.write("Created " + elem + '\n\n')
 
 
 if __name__ == "__main__":
@@ -166,10 +214,15 @@ if __name__ == "__main__":
 
     if command == 'checkout':
         try:
-            version = sys.argv[2]
-            checkout(version)
+            checkout(sys.argv[2])
         except IndexError:
             print("Error: command [checkout] takes exactly 1 argument - version number")
 
     if command == 'status':
         status()
+
+    if command == 'diff':
+        try:
+            diff(sys.argv[2], sys.argv[3])
+        except IndexError:
+            print("Error: command [diff] takes exactly 2 arguments - number of versions to be compared")
